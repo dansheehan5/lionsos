@@ -29,8 +29,14 @@ typedef struct fw_arp_entry {
     uint64_t timestamp;                         /* Time of insertion */
 } fw_arp_entry_t;
 
-typedef struct fw_arp_table {
+typedef struct fw_arp_hash {
+    uint16_t (*hash)(fw_arp_entry_t *);
     fw_arp_entry_t *entries;
+    uint16_t capacity;
+} fw_arp_hash_t;
+
+typedef struct fw_arp_table {
+    fw_arp_hash_t tables[2];
     uint16_t capacity;
 } fw_arp_table_t;
 
@@ -58,28 +64,42 @@ typedef struct fw_arp_queue_handle {
     uint32_t capacity;
 } fw_arp_queue_handle_t;
 
+/* Hash functions for use in the cuckoo table*/
+static uint16_t hash1(uint32_t ip, uint16_t table_size) {
+    return (uint16_t)(ip % table_size);
+}
+
+static uint16_t hash2(uint32_t ip, uint16_t table_size) {
+    return (uint16_t)((ip * table_size) % table_size);
+}
 
 /* Initialise the arp table data structure */
 static void fw_arp_table_init(fw_arp_table_t *table,
-    void *entries, 
+    void *hash_tables[], 
     uint16_t capacity)
 {
-    table->entries = (fw_arp_entry_t *)entries;
-    table->capacity = capacity;
+    table->tables = hash_tables;
+    table->capacity capacity;
 }
 
 /* Find an arp entry for an IP */
-static fw_arp_entry_t *fw_arp_table_find_entry(fw_arp_table_t *table, uint32_t ip)
-{
-    for (uint16_t i = 0; i < table->capacity; i++) {
-        fw_arp_entry_t *entry = table->entries + i;
-        if (entry->state == ARP_STATE_INVALID) {
-            continue;
-        }
+static fw_arp_entry_t *fw_arp_table_find_entry(fw_arp_table_t *table, uint32_t ip) {
+    fw_arp_hash_t t1 = table->tables[0];
+    uint16_t h1 = t1->hash(ip);
 
-        if (entry->ip == ip) {
-            return entry;
-        }
+    fw_arp_entry_t *entry = t1->entries[h1];
+
+    if (entry->ip == ip && entry->state != ARP_STATE_INVALID) {
+        return entry;
+    }
+
+    fw_arp_hash_t t2 = table->tables[1];
+    uint16_t h2 = t2->hash(ip);
+
+    entry = t2->entries[h2];
+
+    if (entry->ip == ip && entry->state != ARP_STATE_INVALID) {
+        return entry;
     }
 
     return NULL;
@@ -134,6 +154,112 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
     slot->timestamp = sddf_timer_time_now(timer_ch);
 
     return ARP_ERR_OKAY;
+}
+
+static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
+                                       uint8_t timer_ch,
+                                       fw_arp_entry_state_t state,
+                                       uint32_t ip,
+                                       uint8_t *mac_addr,
+                                       uint8_t client)
+{
+    fw_arp_entry_state_t t_state = state;
+    uint32_t t_ip = ip;
+    uint8_t *t_mac = mac_addr;
+    uint8_t t_client = client;
+
+
+    fw_arp_entry_t *slot == NULL;
+    if (fw_arp_table_find_entry(table, ip) != NULL) {
+        slot->state = state;
+        slot->ip = ip;
+        if (mac_addr != NULL) {
+            memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+        }
+        slot->client = BIT(client);
+        slot->num_retries = 0;
+        slot->timestamp = sddf_timer_time_now(timer_ch);
+        return ARP_ERR_OKAY;
+    }
+
+    for (uint16_t i = 0; i < table->capacity; i++) {
+        fw_arp_hash_t *t1 = &(table->tables[0]);
+        uint16_t h1 = t1->hash;
+
+        fw_arp_entry_t *entry = t1->entries[h1(ip)];
+
+        if (entry == NULL || entry->state == ARP_STATE_INVALID) {
+            slot = entry;
+
+            slot->state = t_state;
+            slot->ip = t_ip;
+            if (mac_addr != NULL) {
+                memcpy(&slot->mac_addr, t_mac_addr, ETH_HWADDR_LEN);
+            }
+            slot->client = BIT(t_client);
+            slot->num_retries = 0;
+            slot->timestamp = sddf_timer_time_now(timer_ch);
+            return ARP_ERR_OKAY;
+        }
+
+        fw_arp_hash_t tmp = *entry;
+        slot = entry;
+        
+        slot->state = t_state;
+        slot->ip = ip;
+        if (mac_addr != NULL) {
+            memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+        }
+        slot->client = BIT(client);
+        slot->num_retries = 0;
+        slot->timestamp = sddf_timer_time_now(timer_ch);
+
+        t_state = tmp.state;
+        t_ip = tmp.ip;
+        t_client = tmp.client;
+        t_mac = tmp.mac_addr
+        
+        fw_arp_hash_t *t2 = &(table->tables[1]);
+        uint16_t h2 = t2->hash;
+
+        entry = t2->entries[h2(ip)];
+
+        if (t1->entries[h1(ip)] == NULL || entry->state == ARP_STATE_INVALID) {
+            slot->state = state;
+            slot->ip = ip;
+            if (mac_addr != NULL) {
+                memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+            }
+            slot->client = BIT(client);
+            slot->num_retries = 0;
+            slot->timestamp = sddf_timer_time_now(timer_ch);
+            return ARP_ERR_OKAY;
+        }
+
+        fw_arp_hash_t tmp = *entry;
+        slot = entry;
+        
+        slot->state = state;
+        slot->ip = ip;
+        if (mac_addr != NULL) {
+            memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+        }
+        slot->client = BIT(client);
+        slot->num_retries = 0;
+        slot->timestamp = sddf_timer_time_now(timer_ch);
+
+        state = tmp.state;
+        ip = tmp.ip;
+        client = tmp.client;
+
+        t_state = tmp.state;
+        t_ip = tmp.ip;
+        t_client = tmp.client;
+        t_mac = tmp.mac_addr
+    }
+
+    /*TODO: evict something (not what ur putting in), re-call insert*/
+    
 }
 
 /**
