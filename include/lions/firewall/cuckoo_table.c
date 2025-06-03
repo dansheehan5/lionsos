@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <assert.h>
 
 
 /* This is just to ensure I got implementing the operations of a hash table correctly 
@@ -51,7 +52,7 @@ uint16_t *get_entry(cuckoo_table_t *cuckoo_table, uint16_t *entry) {
 }
 
 void evict(cuckoo_table_t *cuckoo_table) {
-
+    
 }
 
 void insert(cuckoo_table_t *cuckoo_table, uint16_t *entry) {
@@ -96,14 +97,35 @@ void insert(cuckoo_table_t *cuckoo_table, uint16_t *entry) {
     insert(cuckoo_table, entry);
 }
 
-void update(cuckoo_table_t *cuckoo_table, uint16_t *new_entry) {
-    uint16_t *old_entry = get_entry(cuckoo_table, new_entry);
+void update(cuckoo_table_t *cuckoo_table, uint16_t *old, uint16_t *new_entry) {
+    uint16_t *old_entry = get_entry(cuckoo_table, *old);
     
     if (old_entry == NULL) {
         insert(cuckoo_table, new_entry);
+        return;
     }
 
+    hash_table_t *t1 = &(cuckoo_table->tables[0]);
+    uint16_t h1 = t1->hash(*old);
 
+    uint16_t *found = t1->entries[h1];
+    
+    if (found != NULL && found == entry) {
+        t1->entries[h1] = new_entry;
+        return;
+    }
+
+    hash_table_t *t2 = &(cuckoo_table->tables[1]);
+    uint16_t h2 = t2->hash(*old);
+
+    found = t2->entries[h2];
+
+    if (found != NULL && found == entry) {
+        t2->entries[h2] = new_entry;
+        return;
+    }
+    // TODO: Error message
+    return NULL;
 
 }
 
@@ -132,7 +154,7 @@ void init_tbl(cuckoo_table_t *table) {
 
 int main(int argc, char *argv[]) {
 
-    cuckoo_table_t test;// = malloc(sizeof(cuckoo_table_t));
+    cuckoo_table_t test;
     init_tbl(&test);
 
     uint16_t in = 100;
