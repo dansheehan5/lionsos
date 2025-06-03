@@ -118,27 +118,27 @@ void init_ht(hash_table_t *t, uint16_t (*hash)(uint16_t)) {
 void init_tbl(cuckoo_table_t *table) {
     table->capacity = TABLE_CAPACITY;
 
-    hash_table_t *t1 = malloc(sizeof(hash_table_t));
-    hash_table_t *t2 = malloc(sizeof(hash_table_t));
+    hash_table_t t1;
+    hash_table_t t2;
 
-    init_ht(t1, &hash1);
-    init_ht(t2, &hash2);
+    init_ht(&t1, &hash1);
+    init_ht(&t2, &hash2);
 
-    table->tables[0] = *t1;
-    table->tables[1] = *t2;
+    table->tables[0] = t1;
+    table->tables[1] = t2;
 }
 
 
 
 int main(int argc, char *argv[]) {
 
-    cuckoo_table_t *test = malloc(sizeof(cuckoo_table_t));
-    init_tbl(test);
+    cuckoo_table_t test;// = malloc(sizeof(cuckoo_table_t));
+    init_tbl(&test);
 
     uint16_t in = 100;
 
-    insert(test, &in);
-    uint16_t *found = get_entry(test, &in);
+    insert(&test, &in);
+    uint16_t *found = get_entry(&test, &in);
     printf("%d\n", *found);
 
 
