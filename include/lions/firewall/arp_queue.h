@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <os/sddf.h>
@@ -163,6 +164,7 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
                                        uint8_t *mac_addr,
                                        uint8_t client)
 {
+    uint8_t t_time = timer_ch;
     fw_arp_entry_state_t t_state = state;
     uint32_t t_ip = ip;
     uint8_t *t_mac = mac_addr;
@@ -193,9 +195,11 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
 
             slot->state = t_state;
             slot->ip = t_ip;
+
             if (mac_addr != NULL) {
                 memcpy(&slot->mac_addr, t_mac_addr, ETH_HWADDR_LEN);
             }
+
             slot->client = BIT(t_client);
             slot->num_retries = 0;
             slot->timestamp = sddf_timer_time_now(timer_ch);
@@ -214,10 +218,12 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
         slot->num_retries = 0;
         slot->timestamp = sddf_timer_time_now(timer_ch);
 
+        t_time = tmp.timestamp;
         t_state = tmp.state;
         t_ip = tmp.ip;
         t_client = tmp.client;
         t_mac = tmp.mac_addr
+
         
         fw_arp_hash_t *t2 = &(table->tables[1]);
         uint16_t h2 = t2->hash;
@@ -248,18 +254,33 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
         slot->num_retries = 0;
         slot->timestamp = sddf_timer_time_now(timer_ch);
 
-        state = tmp.state;
-        ip = tmp.ip;
-        client = tmp.client;
-
+        t_time = tmp.timestamp;
         t_state = tmp.state;
         t_ip = tmp.ip;
         t_client = tmp.client;
         t_mac = tmp.mac_addr
     }
 
-    /*TODO: evict something (not what ur putting in), re-call insert*/
-    
+    /* evict entry if it's not what you're trying to add, return */
+    /* otherwise, get rid of a random entry and re-insert */
+    if (t_ip != ip) {
+        return;
+    } else {
+        bool found = 0;
+        while (!found) {
+            uint16_t entry_ind = rand() % table->capacity;
+            fw_arp_hash_t t = &(table->tables[entry_ind / (table->capacity / 2)]);
+            fw_arp_entry_t evict = t->entries + (entry_ind % t->capacity);
+            if (evict.ip != ip) {
+                t->entries + (entry_ind % t->capacity) = NULL;
+                found = 1;
+            }
+        }
+
+        insert(table, timer_ch, state, ip, mac_addr, client);
+        return;
+    }
+
 }
 
 /**
