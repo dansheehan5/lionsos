@@ -31,7 +31,7 @@ typedef struct fw_arp_entry {
 } fw_arp_entry_t;
 
 typedef struct fw_arp_hash {
-    uint16_t (*hash)(fw_arp_entry_t *);
+    uint16_t (*hash)(uint32_t, uint16_t);
     fw_arp_entry_t *entries;
     uint16_t capacity;
 } fw_arp_hash_t;
@@ -74,30 +74,29 @@ static uint16_t hash2(uint32_t ip, uint16_t table_size) {
     return (uint16_t)((ip * table_size) % table_size);
 }
 
-/* Initialise the arp table data structure */
-static void fw_arp_table_init(fw_arp_table_t *table,
-    void *hash_tables[], 
-    uint16_t capacity)
-{
-    table->tables = hash_tables;
-    table->capacity capacity;
-}
+static void fw_arp_hash_init(fw_arp_hash_t *table,
+    uint16_t capacity,
+    uint16_t (*hash)(uint32_t, uint16_t)) {
+        table->entries = NULL;
+        table->capacity = capacity;
+        table->hash = hash;
+    }
 
 /* Find an arp entry for an IP */
 static fw_arp_entry_t *fw_arp_table_find_entry(fw_arp_table_t *table, uint32_t ip) {
-    fw_arp_hash_t t1 = table->tables[0];
-    uint16_t h1 = t1->hash(ip);
+    fw_arp_hash_t *t1 = &(table->tables[0]);
+    uint16_t h1 = t1->hash(ip, t1->capacity);
 
-    fw_arp_entry_t *entry = t1->entries[h1];
+    fw_arp_entry_t *entry = t1->entries + h1;
 
     if (entry->ip == ip && entry->state != ARP_STATE_INVALID) {
         return entry;
     }
 
-    fw_arp_hash_t t2 = table->tables[1];
-    uint16_t h2 = t2->hash(ip);
+    fw_arp_hash_t *t2 = &(table->tables[1]);
+    uint16_t h2 = t2->hash(ip, t2->capacity);
 
-    entry = t2->entries[h2];
+    entry = t2->entries + h2;
 
     if (entry->ip == ip && entry->state != ARP_STATE_INVALID) {
         return entry;
@@ -115,48 +114,6 @@ static fw_arp_request_t fw_arp_response_from_entry(fw_arp_entry_t *entry) {
     return response;
 }
 
-/* Add an entry to the arp table*/
-static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
-                                       uint8_t timer_ch,
-                                       fw_arp_entry_state_t state,
-                                       uint32_t ip,
-                                       uint8_t *mac_addr,
-                                       uint8_t client)
-{
-    fw_arp_entry_t *slot = NULL;
-    for (uint16_t i = 0; i < table->capacity; i++) {
-        fw_arp_entry_t *entry = table->entries + i;
-
-        if (entry->state == ARP_STATE_INVALID) {
-            if (slot == NULL) {
-                slot = entry;
-            }
-            continue;
-        }
-
-        /* Check for existing entries for this ip - there should only be one */
-        if (entry->ip == ip) {
-            slot = entry;
-            break;
-        }
-    }
-
-    if (slot == NULL) {
-        return ARP_ERR_FULL;
-    }
-
-    slot->state = state;
-    slot->ip = ip;
-    if (mac_addr != NULL) {
-        memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
-    }
-    slot->client = BIT(client);
-    slot->num_retries = 0;
-    slot->timestamp = sddf_timer_time_now(timer_ch);
-
-    return ARP_ERR_OKAY;
-}
-
 static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
                                        uint8_t timer_ch,
                                        fw_arp_entry_state_t state,
@@ -172,7 +129,8 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
 
     fw_arp_entry_t *entry = fw_arp_table_find_entry(table, t_ip);
 
-    fw_arp_entry_t *slot == NULL;
+    fw_arp_entry_t *slot = NULL;
+    /* Check if there's an open slot in the hash table for this entry */
     if (entry == NULL || entry->state == ARP_STATE_INVALID) {
         slot = entry;
         slot->state = t_state;
@@ -188,10 +146,11 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
 
     for (uint16_t i = 0; i < table->capacity; i++) {
         fw_arp_hash_t *t1 = &(table->tables[0]);
-        uint16_t h1 = t1->hash;
+        uint16_t h1 = t1->hash(t_ip, t1->capacity);
 
-        entry = t1->entries[h1(t_ip)];
+        entry = t1->entries + h1;
 
+        /* Check if the slot for the IP is in */
         if (entry == NULL || entry->state == ARP_STATE_INVALID) {
             slot = entry;
 
@@ -208,7 +167,7 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
             return ARP_ERR_OKAY;
         }
 
-        fw_arp_hash_t tmp = *entry;
+        fw_arp_entry_t tmp = *entry;
         slot = entry;
         
         slot->state = t_state;
@@ -224,15 +183,15 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
         t_state = tmp.state;
         t_ip = tmp.ip;
         t_client = tmp.client;
-        t_mac = tmp.mac_addr
+        t_mac = tmp.mac_addr;
 
         
         fw_arp_hash_t *t2 = &(table->tables[1]);
-        uint16_t h2 = t2->hash;
+        uint16_t h2 = t2->hash(t_ip, t2->capacity);
 
-        entry = t2->entries[h2(t_ip)];
+        entry = t2->entries + h2;
 
-        if (t1->entries[h1(t_ip)] == NULL || entry->state == ARP_STATE_INVALID) {
+        if (entry == NULL || entry->state == ARP_STATE_INVALID) {
             slot->state = t_state;
             slot->ip = t_ip;
             if (t_mac != NULL) {
@@ -244,7 +203,7 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
             return ARP_ERR_OKAY;
         }
 
-        fw_arp_hash_t tmp = *entry;
+        tmp = *entry;
         slot = entry;
         
         slot->state = t_state;
@@ -266,21 +225,51 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
     /* evict entry if it's not what you're trying to add, return */
     /* otherwise, get rid of a random entry and re-insert */
     if (t_ip != ip) {
-        return ARP_ERROR_OKAY;
+        return ARP_ERR_OKAY;
     } else {
         bool found = 0;
         while (!found) {
             uint16_t entry_ind = rand() % table->capacity;
-            fw_arp_hash_t t = &(table->tables[entry_ind / (table->capacity / 2)]);
-            fw_arp_entry_t evict = t->entries + (entry_ind % t->capacity);
-            if (evict.ip != ip) {
-                t->entries + (entry_ind % t->capacity) = NULL;
+            fw_arp_hash_t *t = &(table->tables[entry_ind / (table->capacity / 2)]);
+            fw_arp_entry_t *evict = t->entries + (entry_ind % t->capacity);
+            if (evict->ip != ip) {
+                fw_arp_entry_t **ev_addr = &evict;
+                *ev_addr = NULL;
                 found = 1;
             }
         }
 
-        insert(table, timer_ch, state, ip, mac_addr, client);
+        fw_arp_table_add_entry(table, timer_ch, state, ip, mac_addr, client);
         return ARP_ERR_OKAY;
+    }
+
+}
+
+/* Initialise the arp table data structure */
+static void fw_arp_table_init(fw_arp_table_t *table,
+    void *entries,
+    uint16_t capacity)
+{
+    fw_arp_hash_t t1;
+    fw_arp_hash_t t2;
+
+    fw_arp_hash_init(&t1, capacity / 2, hash1);
+    fw_arp_hash_init(&t2, capacity / 2, hash2);
+
+    table->tables[0] = t1;
+    table->tables[1] = t2;
+
+    table->capacity = capacity;
+
+    /* Add the entries to the table */
+    fw_arp_entry_t *to_add = (fw_arp_entry_t *)entries;
+    for (uint16_t i = 0; to_add + i != NULL && i < capacity; i++) {
+        fw_arp_entry_t *e = to_add + i;
+        fw_arp_table_add_entry(table, e->timestamp,
+                                        e->state,
+                                        e->ip,
+                                        e->mac_addr,
+                                        e->client);
     }
 
 }
