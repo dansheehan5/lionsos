@@ -170,17 +170,19 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
     uint8_t *t_mac = mac_addr;
     uint8_t t_client = client;
 
+    fw_arp_entry_t *entry = fw_arp_table_find_entry(table, t_ip);
 
     fw_arp_entry_t *slot == NULL;
-    if (fw_arp_table_find_entry(table, ip) != NULL) {
-        slot->state = state;
-        slot->ip = ip;
-        if (mac_addr != NULL) {
-            memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+    if (entry == NULL || entry->state == ARP_STATE_INVALID) {
+        slot = entry;
+        slot->state = t_state;
+        slot->ip = t_ip;
+        if (t_mac != NULL) {
+            memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
         }
-        slot->client = BIT(client);
+        slot->client = BIT(t_client);
         slot->num_retries = 0;
-        slot->timestamp = sddf_timer_time_now(timer_ch);
+        slot->timestamp = sddf_timer_time_now(t_time);
         return ARP_ERR_OKAY;
     }
 
@@ -188,7 +190,7 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
         fw_arp_hash_t *t1 = &(table->tables[0]);
         uint16_t h1 = t1->hash;
 
-        fw_arp_entry_t *entry = t1->entries[h1(ip)];
+        entry = t1->entries[h1(t_ip)];
 
         if (entry == NULL || entry->state == ARP_STATE_INVALID) {
             slot = entry;
@@ -196,13 +198,13 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
             slot->state = t_state;
             slot->ip = t_ip;
 
-            if (mac_addr != NULL) {
-                memcpy(&slot->mac_addr, t_mac_addr, ETH_HWADDR_LEN);
+            if (t_mac != NULL) {
+                memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
             }
 
             slot->client = BIT(t_client);
             slot->num_retries = 0;
-            slot->timestamp = sddf_timer_time_now(timer_ch);
+            slot->timestamp = sddf_timer_time_now(t_time);
             return ARP_ERR_OKAY;
         }
 
@@ -210,13 +212,13 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
         slot = entry;
         
         slot->state = t_state;
-        slot->ip = ip;
+        slot->ip = t_ip;
         if (mac_addr != NULL) {
-            memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+            memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
         }
-        slot->client = BIT(client);
+        slot->client = BIT(t_client);
         slot->num_retries = 0;
-        slot->timestamp = sddf_timer_time_now(timer_ch);
+        slot->timestamp = sddf_timer_time_now(t_time);
 
         t_time = tmp.timestamp;
         t_state = tmp.state;
@@ -228,43 +230,43 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
         fw_arp_hash_t *t2 = &(table->tables[1]);
         uint16_t h2 = t2->hash;
 
-        entry = t2->entries[h2(ip)];
+        entry = t2->entries[h2(t_ip)];
 
-        if (t1->entries[h1(ip)] == NULL || entry->state == ARP_STATE_INVALID) {
-            slot->state = state;
-            slot->ip = ip;
-            if (mac_addr != NULL) {
-                memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+        if (t1->entries[h1(t_ip)] == NULL || entry->state == ARP_STATE_INVALID) {
+            slot->state = t_state;
+            slot->ip = t_ip;
+            if (t_mac != NULL) {
+                memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
             }
-            slot->client = BIT(client);
+            slot->client = BIT(t_client);
             slot->num_retries = 0;
-            slot->timestamp = sddf_timer_time_now(timer_ch);
+            slot->timestamp = sddf_timer_time_now(t_time);
             return ARP_ERR_OKAY;
         }
 
         fw_arp_hash_t tmp = *entry;
         slot = entry;
         
-        slot->state = state;
-        slot->ip = ip;
+        slot->state = t_state;
+        slot->ip = t_ip;
         if (mac_addr != NULL) {
-            memcpy(&slot->mac_addr, mac_addr, ETH_HWADDR_LEN);
+            memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
         }
-        slot->client = BIT(client);
+        slot->client = BIT(t_client);
         slot->num_retries = 0;
-        slot->timestamp = sddf_timer_time_now(timer_ch);
+        slot->timestamp = sddf_timer_time_now(t_time);
 
         t_time = tmp.timestamp;
         t_state = tmp.state;
         t_ip = tmp.ip;
         t_client = tmp.client;
-        t_mac = tmp.mac_addr
+        t_mac = tmp.mac_addr;
     }
 
     /* evict entry if it's not what you're trying to add, return */
     /* otherwise, get rid of a random entry and re-insert */
     if (t_ip != ip) {
-        return;
+        return ARP_ERROR_OKAY;
     } else {
         bool found = 0;
         while (!found) {
@@ -278,7 +280,7 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
         }
 
         insert(table, timer_ch, state, ip, mac_addr, client);
-        return;
+        return ARP_ERR_OKAY;
     }
 
 }
