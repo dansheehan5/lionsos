@@ -254,8 +254,19 @@ static uint16_t process_retries(void)
 /* Flush all non pending cache entries */
 static uint16_t arp_table_flush(void) {
     uint16_t flushed = 0;
-    for (uint16_t i = 0; i < arp_table.capacity; i++) {
-        fw_arp_entry_t *entry = arp_table.entries + i;
+
+    for (uint16_t i = 0; i < arp_table.capacity / 2; i++) {
+        fw_arp_entry_t *entry = arp_table.tables[0].entries + i;
+        if (entry->state == ARP_STATE_INVALID || entry->state == ARP_STATE_PENDING) {
+            continue;
+        }
+
+        entry->state = ARP_STATE_INVALID;
+        flushed++;
+    }
+
+    for (uint16_t i = 0; i < arp_table.capacity / 2; i++) {
+        fw_arp_entry_t *entry = arp_table.tables[1].entries + i;
         if (entry->state == ARP_STATE_INVALID || entry->state == ARP_STATE_PENDING) {
             continue;
         }
