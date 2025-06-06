@@ -75,12 +75,13 @@ static uint16_t hash2(uint32_t ip, uint16_t table_size) {
 }
 
 static void fw_arp_hash_init(fw_arp_hash_t *table,
-    uint16_t capacity,
-    uint16_t (*hash)(uint32_t, uint16_t)) {
-        table->entries = NULL;
-        table->capacity = capacity;
-        table->hash = hash;
-    }
+                             fw_arp_entry_t *entries,
+                             uint16_t capacity,
+                             uint16_t (*hash)(uint32_t, uint16_t)) {
+    table->entries = entries;
+    table->capacity = capacity;
+    table->hash = hash;
+}
 
 /* Find an arp entry for an IP */
 static fw_arp_entry_t *fw_arp_table_find_entry(fw_arp_table_t *table, uint32_t ip) {
@@ -127,99 +128,57 @@ static fw_arp_error_t fw_arp_table_add_entry(fw_arp_table_t *table,
     uint8_t *t_mac = mac_addr;
     uint8_t t_client = client;
 
-    fw_arp_entry_t *entry = fw_arp_table_find_entry(table, t_ip);
-
-    fw_arp_entry_t *slot = NULL;
-    /* Check if there's an open slot in the hash table for this entry */
-    if (entry == NULL || entry->state == ARP_STATE_INVALID) {
-        slot = entry;
-        slot->state = t_state;
-        slot->ip = t_ip;
-        if (t_mac != NULL) {
-            memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
-        }
-        slot->client = BIT(t_client);
-        slot->num_retries = 0;
-        slot->timestamp = sddf_timer_time_now(t_time);
+    fw_arp_entry_t *slot = fw_arp_table_find_entry(table, t_ip);
+    if (slot != NULL) {
         return ARP_ERR_OKAY;
     }
 
+    fw_arp_entry_t tmp0;
+    fw_arp_entry_t tmp1;
+    tmp1.ip = ip;
     for (uint16_t i = 0; i < table->capacity; i++) {
+
+        /* Check for cycles */
         fw_arp_hash_t *t1 = &(table->tables[0]);
-        uint16_t h1 = t1->hash(t_ip, t1->capacity);
+        uint16_t h1 = t1->hash(tmp1.ip, t1->capacity);
 
-        entry = t1->entries + h1;
+        /* Check if the first hash table slot for the IP is in use */
+        slot = t1->entries + h1;
+        memset(&tmp0, 0,sizeof(fw_arp_entry_t));
+        if (slot->state != ARP_STATE_INVALID) {
+            /* Store what's in the valid slot*/
+            memcpy(&tmp0, slot, sizeof(fw_arp_entry_t));
+        }
 
-        /* Check if the slot for the IP is in */
-        if (entry == NULL || entry->state == ARP_STATE_INVALID) {
-            slot = entry;
+        /* Insert into hash table slot */
+        memcpy(slot, &tmp1, sizeof(fw_arp_entry_t));
 
-            slot->state = t_state;
-            slot->ip = t_ip;
-
-            if (t_mac != NULL) {
-                memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
-            }
-
-            slot->client = BIT(t_client);
-            slot->num_retries = 0;
-            slot->timestamp = sddf_timer_time_now(t_time);
+        if (tmp0.state == ARP_STATE_INVALID) {
             return ARP_ERR_OKAY;
         }
 
-        fw_arp_entry_t tmp = *entry;
-        slot = entry;
-        
-        slot->state = t_state;
-        slot->ip = t_ip;
-        if (mac_addr != NULL) {
-            memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
-        }
-        slot->client = BIT(t_client);
-        slot->num_retries = 0;
-        slot->timestamp = sddf_timer_time_now(t_time);
-
-        t_time = tmp.timestamp;
-        t_state = tmp.state;
-        t_ip = tmp.ip;
-        t_client = tmp.client;
-        t_mac = tmp.mac_addr;
-
-        
         fw_arp_hash_t *t2 = &(table->tables[1]);
         uint16_t h2 = t2->hash(t_ip, t2->capacity);
 
-        entry = t2->entries + h2;
+        /* Check if the second hash table slot for evicted IP is in use */
+        slot = t2->entries + h2;
+        memset(&tmp1, 0,sizeof(fw_arp_entry_t));
+        if (slot->state != ARP_STATE_INVALID) {
+            /* Store what's in the valid slot */
+            memcpy(&tmp1, slot, sizeof(fw_arp_entry_t));
+        }
 
-        if (entry == NULL || entry->state == ARP_STATE_INVALID) {
-            slot->state = t_state;
-            slot->ip = t_ip;
-            if (t_mac != NULL) {
-                memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
-            }
-            slot->client = BIT(t_client);
-            slot->num_retries = 0;
-            slot->timestamp = sddf_timer_time_now(t_time);
+        /* Story evicted entry from first hash in second hash table */
+        memcpy(slot, &tmp0, sizeof(fw_arp_entry_t));
+
+        if (tmp1.state == ARP_STATE_INVALID) {
             return ARP_ERR_OKAY;
         }
 
-        tmp = *entry;
-        slot = entry;
-        
-        slot->state = t_state;
-        slot->ip = t_ip;
-        if (mac_addr != NULL) {
-            memcpy(&slot->mac_addr, t_mac, ETH_HWADDR_LEN);
+        /* Check for cycles */
+        if (t1->hash(tmp1.ip, t1->capacity) == h1) {
+            break;
         }
-        slot->client = BIT(t_client);
-        slot->num_retries = 0;
-        slot->timestamp = sddf_timer_time_now(t_time);
-
-        t_time = tmp.timestamp;
-        t_state = tmp.state;
-        t_ip = tmp.ip;
-        t_client = tmp.client;
-        t_mac = tmp.mac_addr;
     }
 
     /* evict entry if it's not what you're trying to add, return */
@@ -250,28 +209,10 @@ static void fw_arp_table_init(fw_arp_table_t *table,
     void *entries,
     uint16_t capacity)
 {
-    fw_arp_hash_t t1;
-    fw_arp_hash_t t2;
-
-    fw_arp_hash_init(&t1, capacity / 2, hash1);
-    fw_arp_hash_init(&t2, capacity / 2, hash2);
-
-    table->tables[0] = t1;
-    table->tables[1] = t2;
-
+    uint16_t hash_capacity = capacity / 2;
+    fw_arp_hash_init(&table->tables[0], entries, hash_capacity, hash1);
+    fw_arp_hash_init(&table->tables[1], entries + sizeof(fw_arp_entry_t) * hash_capacity, hash_capacity, hash2);
     table->capacity = capacity;
-
-    /* Add the entries to the table */
-    fw_arp_entry_t *to_add = (fw_arp_entry_t *)entries;
-    for (uint16_t i = 0; to_add + i != NULL && i < capacity; i++) {
-        fw_arp_entry_t *e = to_add + i;
-        fw_arp_table_add_entry(table, e->timestamp,
-                                        e->state,
-                                        e->ip,
-                                        e->mac_addr,
-                                        e->client);
-    }
-
 }
 
 /**
