@@ -200,7 +200,8 @@ static uint16_t process_retries(void)
 {
     uint16_t pending_requests = 0;
     for (uint16_t i = 0; i < arp_table.capacity; i++) {
-        fw_arp_entry_t *entry = arp_table.entries + i;
+        fw_arp_hash_t table = arp_table.tables[i / (arp_table.capacity / 2)];
+        fw_arp_entry_t *entry = table.entries + (i % table.capacity);
         if (entry->state != ARP_STATE_PENDING) {
             continue;
         }
